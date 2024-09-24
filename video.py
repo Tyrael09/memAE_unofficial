@@ -18,6 +18,8 @@ parser = argparse.ArgumentParser(description='Prepare dataset')
 parser.add_argument('--dataset', type=str, help="Which dataset am I working on? Avenue, UCSDped2")
 parser.add_argument('--datapath', type=str, help="Data directory")
 
+# TODO: Don't need to use this at all! Videos are loaded on the fly, this script is just for extracting frames beforehand
+
 def save_ucsd_dataset(path2read):
     """
     Convert the tif image into jpg image 

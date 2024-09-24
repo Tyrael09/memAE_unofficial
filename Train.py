@@ -22,7 +22,7 @@ from collections import OrderedDict
 import copy
 import time
 
-import data.utils as data_utils
+import data.my_utils_2 as data_utils # changed Dataloader definitions!
 import models.loss as loss
 import utils
 from models import AutoEncoderCov3D, AutoEncoderCov3DMem
@@ -30,18 +30,18 @@ from models import AutoEncoderCov3D, AutoEncoderCov3DMem
 import argparse
 
 print("--------------PyTorch VERSION:", torch.__version__)
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print("..............device", device)
 
 parser = argparse.ArgumentParser(description="MemoryNormality")
-parser.add_argument('--gpus', nargs='+', type=str, help='gpus')
-parser.add_argument('--batch_size', type=int, default=12, help='batch size for training')
-parser.add_argument('--epochs', type=int, default=80, help='number of epochs for training')
-parser.add_argument('--val_epoch', type=int, default=2, help='evaluate the model every %d epoch')
-parser.add_argument('--h', type=int, default=256, help='height of input images')
-parser.add_argument('--w', type=int, default=256, help='width of input images')
+parser.add_argument('--gpus', nargs='+', type=str, default=0, help='gpus') # 
+parser.add_argument('--batch_size', type=int, default=8, help='batch size for training')
+parser.add_argument('--epochs', type=int, default=10, help='number of epochs for training') # low for testing
+parser.add_argument('--val_epoch', type=int, default=5, help='evaluate the model every %d epoch')
+parser.add_argument('--h', type=int, default=128, help='height of input images') # reduced from 256x256
+parser.add_argument('--w', type=int, default=128, help='width of input images')
 parser.add_argument('--c', type=int, default=1, help='channel of input images')
-parser.add_argument('--lr', type=float, default=2e-4, help='initial learning rate')
+parser.add_argument('--lr', type=float, default=1e-4, help='initial learning rate') # was 2e-4 # TODO: check how to modify according to batch size
 parser.add_argument('--t_length', type=int, default=16, help='length of the frame sequences')
 parser.add_argument('--ModelName', help='AE/MemAE', type=str, default='MemAE')
 parser.add_argument('--ModelSetting', help='Conv3D/Conv3DSpar',type=str, default='Conv3DSpar')  # give the layer details later
@@ -49,17 +49,15 @@ parser.add_argument('--MemDim', help='Memory Dimention', type=int, default=2000)
 parser.add_argument('--EntropyLossWeight', help='EntropyLossWeight', type=float, default=0.0002)
 parser.add_argument('--ShrinkThres', help='ShrinkThres', type=float, default=0.0025)
 parser.add_argument('--Suffix', help='Suffix', type=str, default='Non')
-parser.add_argument('--num_workers', type=int, default=4, help='number of workers for the train loader')
-parser.add_argument('--num_workers_test', type=int, default=1, help='number of workers for the test loader')
-parser.add_argument('--dataset_type', type=str, default='ped2', help='type of dataset: ped2, avenue, shanghai')
-parser.add_argument('--dataset_path', type=str, default='./dataset/', help='directory of data')
-parser.add_argument('--exp_dir', type=str, default='log', help='directory of log')
-parser.add_argument('--version', type=int, default=0, help='experiment version')
+parser.add_argument('--num_workers', type=int, default=8, help='number of workers for the train loader') # use 8 later
+parser.add_argument('--num_workers_test', type=int, default=8, help='number of workers for the test loader')
+parser.add_argument('--dataset_type', type=str, default='Cataract', help='type of dataset: ped2, avenue, shanghai')
+parser.add_argument('--dataset_path', type=str, default='/local/scratch/hendrik/memAE/', help='directory of data')
+parser.add_argument('--exp_dir', type=str, default='/local/scratch/hendrik/memAE/Cataract/checkpoints', help='directory of log')
+parser.add_argument('--version', type=int, default=5, help='experiment version') # TODO: modify this after every run
 
 args = parser.parse_args()
-
 torch.manual_seed(2020)
-
 torch.backends.cudnn.enabled = True # make sure to use cudnn for computational performance
 
 def arrange_image(im_input):
@@ -68,29 +66,32 @@ def arrange_image(im_input):
     im_input = np.reshape(im_input, [b * t, ch, h, w])
     return im_input
 
-train_folder, test_folder = data_utils.give_data_folder(args.dataset_type, 
-                                                        args.dataset_path)
-
+#train_folder, test_folder = data_utils.give_data_folder(args.dataset_type, 
+#                                                        args.dataset_path)
+#train_folder = args.dataset_path + args.dataset_type + '/frames/training/'
+#test_folder = args.dataset_path + args.dataset_type + '/frames/testing/' # only used for validation
+train_folder = test_folder = "/local/scratch/Cataract-1K-Full-Videos/"
 print("The training path", train_folder)
 print("The testing path", test_folder)
 
+frame_trans = data_utils.give_frame_trans([args.h, args.w]) # function returns a set of transformation instructions that will resize (to 256x256), grayscale and normalise frames upon which "frame_trans" is applied.
+# At this step, nothing but the definition of the transformation happens yet. The transformation operation happens in data_utils.DataLoader(..., frame_trans, ..., ...) just below. 
 
-frame_trans = data_utils.give_frame_trans(args.dataset_type, [args.h, args.w])
+train_csv = test_csv = "/local/scratch/hendrik/tiny_annotations.csv" # change path later, just for debugging - 13secs now
+# test_csv = "/local/scratch/hendrik/tiny_annotations.csv" # obviously, this should be different later
 
-
-train_dataset = data_utils.DataLoader(train_folder, frame_trans, time_step=args.t_length - 1, num_pred=1)
-test_dataset = data_utils.DataLoader(test_folder, frame_trans, time_step=args.t_length - 1, num_pred=1)
+train_dataset = test_dataset = data_utils.MyDataset(train_folder, frame_trans, train_csv, time_step=args.t_length - 1, num_pred=1) # calls data_utils.setup() (if folder is a str) or data_utils.setup_multiple() (if folder is a list) in init.
+# test_dataset = data_utils.MyDataset(test_folder, frame_trans, test_csv, time_step=args.t_length - 1, num_pred=1)
 
 train_batch = data.DataLoader(train_dataset, batch_size = args.batch_size, 
-                              shuffle=True, num_workers=args.num_workers, drop_last=True)
+                              shuffle=True, num_workers=args.num_workers, drop_last=True, pin_memory=True) # try with pin_memory=True
 test_batch = data.DataLoader(test_dataset, batch_size = args.batch_size, 
-                             shuffle=False, num_workers=args.num_workers, drop_last=True)
+                             shuffle=False, num_workers=args.num_workers, drop_last=True, pin_memory=True) # same here
 
-print("Training data shape", len(train_batch))
-print("Validation data shape", len(test_batch))
+print("Training data shape", len(train_batch)) # should be secs * fps / frame skip -> here with 18000 frames and frame_skip = 16 -> ~4500
+print("Validation data shape", len(test_batch)) # TODO: check case_2000 fps
 
 # Model setting
-
 if (args.ModelName == 'AE'):
     model = AutoEncoderCov3D(args.c)
 elif(args.ModelName=='MemAE'):
@@ -99,21 +100,20 @@ else:
     model = []
     print('Wrong Name.')
 
-    
-model = model.to(device)
-parameter_list = [p for p in model.parameters() if p.requires_grad]
+model.to(device) # should be cuda here
+parameter_list = [p for p in model.parameters() if p.requires_grad] 
 
 for name, p in model.named_parameters():
     if not p.requires_grad:
         print("---------NO GRADIENT-----", name)
         
 optimizer = torch.optim.Adam(parameter_list, lr = args.lr)
-scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[40], gamma=0.2)  # version 2
+scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[40], gamma=0.2)  
 
 #scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer,T_max =args.epochs)
 
 # Report the training process
-log_dir = os.path.join(args.exp_dir, args.dataset_type, 'lr_%.5f_entropyloss_%.5f_version_%d' % (
+log_dir = os.path.join(args.exp_dir, 'lr_%.5f_entropyloss_%.5f_version_%d' % (
     args.lr, args.EntropyLossWeight, args.version))
 if not os.path.exists(log_dir):
     os.makedirs(log_dir)
@@ -127,25 +127,30 @@ for arg in vars(args):
 train_writer = SummaryWriter(log_dir=log_dir)
 
 # warmup
-model.train()
-with torch.no_grad():
-    for batch_idx, frame in enumerate(train_batch):
-        frame = frame.reshape([args.batch_size, args.t_length, args.c, args.h, args.w])
-        frame = frame.permute(0, 2, 1, 3, 4)
-        frame = frame.to(device)
-        model_output = model(frame)
+#print("training starts")
+#model.train()
+#with torch.no_grad(): # takes 30mins with one 13s clip....
+#    #print("now the batches", flush=True)
+#    for batch_idx, frame in enumerate(train_batch): # this section seems to be reached, but no print outputs earlier??
+#        # print(batch_idx, frame) # also reached, but no prints
+#        frame = frame.reshape([args.batch_size, args.t_length, args.c, args.h, args.w])
+#        frame = frame.permute(0, 2, 1, 3, 4)
+#        frame = frame.to(device)
+#        model_output = model(frame)
 
 # Training
 for epoch in range(args.epochs):
+    #print(epoch)
     model.train()
     tr_re_loss, tr_mem_loss, tr_tot = 0.0, 0.0, 0.0
     progress_bar = tqdm(train_batch)
 
     for batch_idx, frame in enumerate(progress_bar):
+        #print("progress yay")
         progress_bar.update()
         frame = frame.reshape([args.batch_size, args.t_length, args.c, args.h, args.w])
         frame = frame.permute(0, 2, 1, 3, 4)
-        frame = frame.to(device)
+        frame = frame.to(device) # cuda
         optimizer.zero_grad()
 
         model_output = model(frame)

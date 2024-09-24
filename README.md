@@ -17,7 +17,7 @@ Majority of the code are based on the original repo https://github.com/donggong1
 
 - `./requirement.sh`
 
-#### Prepare dataset
+#### Prepare dataset (ignore when loading directly from videos during training)
 
 ```pyth
 prepare_data.sh dataset datapath

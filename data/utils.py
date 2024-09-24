@@ -107,7 +107,7 @@ def setup(path, videos):
     return videos, video_string
 
 
-def give_frame_trans(dataset_type, imshape):
+def give_frame_trans(dataset_type, imshape): # The returned transformation operation reshapes input frames to 256x256 and returns grayscale/normalised frames. 
     height, width = imshape
     print("--There is no other augmentation except resizing, grayscale and normalization--")
     frame_trans = transforms.Compose([transforms.Resize([height, width]),
